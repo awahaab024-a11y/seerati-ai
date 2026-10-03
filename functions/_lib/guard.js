@@ -1,0 +1,27 @@
+export const SEC={"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store","X-Content-Type-Options":"nosniff"};
+export const json=(o,s=200)=>new Response(JSON.stringify(o),{status:s,headers:SEC});
+const mem=new Map();
+// Per-IP limits: per-minute and per-day. Uses KV (binding RATE_KV) if present, else best-effort in-memory per isolate.
+export async function limited(env,ip,lim){
+  const perMin=lim?.perMin??(+env.RATE_PER_MIN||5),perDay=lim?.perDay??(+env.RATE_PER_DAY||40),now=Date.now();
+  const keys=[[`m:${ip}:${Math.floor(now/6e4)}`,perMin,120],[`d:${ip}:${Math.floor(now/864e5)}`,perDay,90000]];
+  for(const[k,max,ttl]of keys){
+    let n;
+    if(env.RATE_KV){n=+(await env.RATE_KV.get(k))||0;if(n>=max)return true;await env.RATE_KV.put(k,String(n+1),{expirationTtl:ttl})}
+    else{n=mem.get(k)||0;if(n>=max)return true;mem.set(k,n+1);if(mem.size>5000)mem.clear()}
+  }
+  return false;
+}
+export function parseJson(t){
+  const c=String(t).replace(/^```(?:json)?/i,"").replace(/```$/,"").trim();
+  try{return JSON.parse(c)}catch{const a=c.indexOf("{"),b=c.lastIndexOf("}");return JSON.parse(c.slice(a,b+1))}
+}
+// Optional Cloudflare Turnstile check: enforced only when TURNSTILE_SECRET is set.
+export async function verifyTurnstile(env,token,ip){
+  if(!env.TURNSTILE_SECRET)return true;
+  if(!token||String(token).length>2100)return false;
+  try{
+    const r=await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({secret:env.TURNSTILE_SECRET,response:token,remoteip:ip||""}),signal:AbortSignal.timeout(8000)});
+    return !!(await r.json()).success;
+  }catch{return false}
+}

@@ -1,0 +1,12 @@
+import test from "node:test";import assert from "node:assert/strict";import fs from "node:fs";import {execSync} from "node:child_process";
+execSync("node tools/build-seo.mjs",{stdio:"ignore"});
+const skip=new Set(["index.html","404.html","privacy.html","terms.html","cookies.html"]);
+const files=[...fs.readdirSync("public").filter(f=>f.endsWith(".html")&&!skip.has(f)).map(f=>"public/"+f),...fs.readdirSync("public/blog").map(f=>"public/blog/"+f)];
+const pg=files.map(f=>({f,h:fs.readFileSync(f,"utf8")}));
+const words=h=>h.replace(/<script.*?<\/script>|<[^>]+>/gs," ").split(/\s+/).filter(Boolean).length;
+test("every SEO page has title, description, one h1, canonical",()=>{for(const{f,h}of pg){assert.match(h,/<title>[^<]{10,}/,f);assert.match(h,/<meta name="description" content="[^"]{40,}/,f);assert.equal((h.match(/<h1>/g)||[]).length,1,f);assert.match(h,/rel="canonical"/,f)}});
+test("titles and descriptions are unique",()=>{for(const re of [/<title>([^<]*)/,/name="description" content="([^"]*)/]){const v=pg.map(p=>p.h.match(re)[1]);assert.equal(new Set(v).size,v.length)}});
+test("job pages are not thin and carry unique content",()=>{const j=pg.filter(p=>p.f.startsWith("public/cv-")&&!/cv-maker|cv-by-profession/.test(p.f));assert.ok(j.length>=8);for(const p of j)assert.ok(words(p.h)>=300,p.f+" "+words(p.h))});
+test("sitemap lists all pages",()=>{const s=fs.readFileSync("public/sitemap.xml","utf8");for(const{f}of pg)assert.ok(s.includes(f.replace("public","").replace(".html","")),f)});
+test("generic landing pages are substantial (>=380 words)",()=>{for(const s of["cv-maker","resume-builder","ats-resume","cover-letter","linkedin-summary","resume-templates","free-cv-template","ats-friendly-resume","cv-maker-arabic","cv-maker-english"]){const p=pg.find(x=>x.f==="public/"+s+".html");assert.ok(p&&words(p.h)>=380,s+" "+(p&&words(p.h)))}});
+test("blog articles are substantial (>=420 words)",()=>{const a=pg.filter(p=>p.f.startsWith("public/blog/"));assert.equal(a.length,8);for(const p of a)assert.ok(words(p.h)>=420,p.f+" "+words(p.h))});

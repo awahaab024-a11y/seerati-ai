@@ -1,0 +1,7 @@
+name = "seerati-ai"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "public"
+# Optional persistent rate limiting (npx wrangler kv namespace create RATE_KV, then paste the id):
+# [[kv_namespaces]]
+# binding = "RATE_KV"
+# id = "PASTE_ID"

@@ -1,0 +1,21 @@
+import test from "node:test";import assert from "node:assert/strict";
+import {onRequestPost} from "../functions/api/ai.js";import {buildPrompt} from "../functions/_lib/prompts.js";import {parseJson,limited} from "../functions/_lib/guard.js";
+const req=(b,h={})=>new Request("https://x/api/ai",{method:"POST",headers:{"Content-Type":"application/json",...h},body:typeof b=="string"?b:JSON.stringify(b)});
+const mock=text=>{globalThis.fetch=async()=>({ok:true,status:200,json:async()=>({candidates:[{content:{parts:[{text}]}}]})})};
+let n=0;const ip=()=>({"CF-Connecting-IP":"t"+(n++)});
+test("generate parses fenced JSON",async()=>{mock('```json\n{"summary":"s","exp":["a"],"skills":"x","jd":{}}\n```');const r=await onRequestPost({request:req({task:"generate",lang:"ar",data:"{}"},ip()),env:{GEMINI_API_KEY:"k"}});assert.equal(r.status,200);assert.equal((await r.json()).result.summary,"s")});
+test("unknown task and bad kind rejected",async()=>{for(const b of [{task:"x"},{task:"rewrite",kind:"evil",text:"a"}]){const r=await onRequestPost({request:req(b,ip()),env:{GEMINI_API_KEY:"k"}});assert.equal(r.status,400)}});
+test("missing key -> 503 not_configured",async()=>{const r=await onRequestPost({request:req({task:"cover",data:"{}"},ip()),env:{}});assert.equal(r.status,503);assert.equal((await r.json()).code,"not_configured")});
+test("oversized and non-json rejected",async()=>{assert.equal((await onRequestPost({request:req("x".repeat(41000),ip()),env:{}})).status,413);const r=new Request("https://x",{method:"POST",headers:{"Content-Type":"text/plain"},body:"{}"});assert.equal((await onRequestPost({request:r,env:{}})).status,415)});
+test("origin check",async()=>{const r=await onRequestPost({request:req({task:"jd",jd:"a"},{Origin:"https://evil.com",...ip()}),env:{ALLOWED_ORIGIN:"https://ok.com",GEMINI_API_KEY:"k"}});assert.equal(r.status,403)});
+test("rate limit per minute",async()=>{mock("{}");const env={GEMINI_API_KEY:"k",RATE_PER_MIN:"2"},h={"CF-Connecting-IP":"rl"};const s=[];for(let i=0;i<3;i++)s.push((await onRequestPost({request:req({task:"jd",jd:"a"},h),env})).status);assert.deepEqual(s,[200,200,429])});
+test("prompt isolates untrusted data and is capped",()=>{const p=buildPrompt({task:"cover",lang:"en",data:"x".repeat(50000)}).prompt;assert.ok(p.includes("<DATA>")&&p.includes("untrusted"));assert.ok(p.length<22000)});
+test("parseJson tolerates wrapper text",()=>{assert.deepEqual(parseJson('Here: {"a":1} done'),{a:1})});
+test("provider switch",async()=>{let url="";globalThis.fetch=async u=>{url=u;return{ok:true,status:200,json:async()=>({content:[{text:"ok"}]})}};await onRequestPost({request:req({task:"cover",data:"{}"},ip()),env:{AI_PROVIDER:"claude",ANTHROPIC_API_KEY:"k"}});assert.match(url,/anthropic/)});
+test("turnstile enforced only when secret set",async()=>{
+  const env={GEMINI_API_KEY:"k",TURNSTILE_SECRET:"s"};
+  let r=await onRequestPost({request:req({task:"jd",jd:"a"},ip()),env});assert.equal(r.status,403);
+  globalThis.fetch=async u=>String(u).includes("siteverify")?{ok:true,json:async()=>({success:true})}:{ok:true,status:200,json:async()=>({candidates:[{content:{parts:[{text:"{}"}]}}]})};
+  r=await onRequestPost({request:req({task:"jd",jd:"a"},{"X-Turnstile-Token":"tok",...ip()}),env});assert.equal(r.status,200);
+});
+test("plan limits helper",async()=>{const {limitsFor}=await import("../functions/_lib/plans.js");assert.equal(limitsFor({}, "free").perMin,5);assert.equal(limitsFor({}, "pro").perDay,400);assert.equal(limitsFor({RATE_PER_MIN:"9"},"free").perMin,9)});

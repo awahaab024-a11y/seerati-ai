@@ -1,0 +1,15 @@
+import test from "node:test";import assert from "node:assert/strict";import fs from "node:fs";
+const {handle}=await import("../supabase/functions/ai/handler.ts");
+const req=(b,h={},m="POST")=>new Request("https://x/functions/v1/ai",{method:m,headers:{"Content-Type":"application/json",...h},body:m==="POST"?(typeof b=="string"?b:JSON.stringify(b)):undefined});
+const mock=text=>{globalThis.fetch=async()=>({ok:true,status:200,json:async()=>({candidates:[{content:{parts:[{text}]}}]})})};
+const never=async()=>false;
+test("shared logic is in sync with functions/_lib",()=>{for(const f of["prompts","providers","guard","plans"]){const a=fs.readFileSync(`functions/_lib/${f}.js`,"utf8"),b=fs.readFileSync(`supabase/functions/_shared/${f}.js`,"utf8");assert.ok(b.endsWith(a),f+" out of sync: run npm run sync:supabase")}});
+test("preflight returns CORS for the allowed origin",async()=>{const r=await handle(req(null,{},"OPTIONS"),{ALLOWED_ORIGIN:"https://ok.com"},never);assert.equal(r.status,204);assert.equal(r.headers.get("Access-Control-Allow-Origin"),"https://ok.com")});
+test("wrong origin is rejected",async()=>{const r=await handle(req({task:"jd",jd:"a"},{Origin:"https://evil.com"}),{ALLOWED_ORIGIN:"https://ok.com",GEMINI_API_KEY:"k"},never);assert.equal(r.status,403)});
+test("generate works and parses fenced JSON",async()=>{mock('```json\n{"summary":"s","exp":["a"],"skills":"x","jd":{}}\n```');const r=await handle(req({task:"generate",lang:"ar",data:"{}"}),{GEMINI_API_KEY:"k"},never);assert.equal(r.status,200);assert.equal((await r.json()).result.summary,"s")});
+test("unknown task rejected, missing key -> 503",async()=>{assert.equal((await handle(req({task:"x"}),{GEMINI_API_KEY:"k"},never)).status,400);const r=await handle(req({task:"cover",data:"{}"}),{},never);assert.equal(r.status,503)});
+test("rate limit -> 429, DB failure fails closed -> 502",async()=>{assert.equal((await handle(req({task:"jd",jd:"a"}),{GEMINI_API_KEY:"k"},async()=>true)).status,429);assert.equal((await handle(req({task:"jd",jd:"a"}),{GEMINI_API_KEY:"k"},async()=>{throw new Error("db")})).status,502)});
+test("turnstile enforced when secret set",async()=>{const r=await handle(req({task:"jd",jd:"a"}),{GEMINI_API_KEY:"k",TURNSTILE_SECRET:"s"},never);assert.equal(r.status,403)});
+test("default limiter calls the rate_hit RPC with service role",async()=>{let seen;globalThis.fetch=async(u,o)=>{if(String(u).includes("/rpc/rate_hit")){seen={u:String(u),h:o.headers,b:JSON.parse(o.body)};return{ok:true,json:async()=>false}}return{ok:true,status:200,json:async()=>({candidates:[{content:{parts:[{text:"{}"}]}}]})}};
+ const r=await handle(req({task:"jd",jd:"a"},{"cf-connecting-ip":"1.2.3.4"}),{GEMINI_API_KEY:"k",SUPABASE_URL:"https://p.supabase.co",SUPABASE_SERVICE_ROLE_KEY:"srv"});
+ assert.equal(r.status,200);assert.match(seen.u,/p\.supabase\.co\/rest\/v1\/rpc\/rate_hit/);assert.equal(seen.h.Authorization,"Bearer srv");assert.match(seen.b.p_key,/1\.2\.3\.4/)});

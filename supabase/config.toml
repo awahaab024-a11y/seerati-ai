@@ -1,0 +1,3 @@
+# Minimal config. Create/link the project with: supabase link --project-ref <ref>
+[functions.ai]
+verify_jwt = false   # public endpoint: protected by Turnstile + per-IP rate limits (see README)

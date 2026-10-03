@@ -1,0 +1,47 @@
+// AI Provider interface: (env, prompt, wantJson) => Promise<string>. Select with env.AI_PROVIDER = gemini | claude | openai.
+const err=(code,m)=>Object.assign(new Error(m||code),{code});
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// Retry transient provider failures (5xx / network aborts) up to RETRIES times with backoff.
+const RETRIES=2, BACKOFF=[400,1200];
+const once=(url,headers,body)=>fetch(url,{method:"POST",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(body),signal:AbortSignal.timeout(28000)});
+const post=async(url,headers,body)=>{
+  let r;
+  for(let a=0;;a++){
+    try{r=await once(url,headers,body)}
+    catch(e){ // network error or timeout
+      if(a<RETRIES){await sleep(BACKOFF[a]);continue}
+      throw err("provider_error","network");
+    }
+    if(r.status===429)throw err("rate_limited");
+    if(r.ok)break;
+    if(r.status>=500&&a<RETRIES){await sleep(BACKOFF[a]);continue} // 503 high-demand etc.
+    throw err("provider_error",`${r.status}`);
+  }
+  return r.json();
+};
+const need=(v)=>{if(!v)throw err("not_configured");return v};
+export const PROVIDERS={
+  async gemini(env,prompt,j){
+    const key=need(env.GEMINI_API_KEY),model=env.GEMINI_MODEL||"gemini-flash-latest";
+    const d=await post(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,{"x-goog-api-key":key},
+      {contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:.4,...(j?{responseMimeType:"application/json"}:{})}});
+    return (d.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
+  },
+  async claude(env,prompt){
+    const key=need(env.ANTHROPIC_API_KEY);
+    const d=await post("https://api.anthropic.com/v1/messages",{"x-api-key":key,"anthropic-version":"2023-06-01"},
+      {model:env.CLAUDE_MODEL||"claude-sonnet-5-5",max_tokens:2000,messages:[{role:"user",content:prompt}]});
+    return (d.content||[]).map(c=>c.text||"").join("");
+  },
+  async openai(env,prompt,j){
+    const key=need(env.OPENAI_API_KEY);
+    const d=await post("https://api.openai.com/v1/chat/completions",{Authorization:`Bearer ${key}`},
+      {model:env.OPENAI_MODEL||"gpt-4o-mini",temperature:.4,messages:[{role:"user",content:prompt}],...(j?{response_format:{type:"json_object"}}:{})});
+    return d.choices?.[0]?.message?.content||"";
+  }
+};
+export async function callProvider(env,prompt,j){
+  const p=PROVIDERS[(env.AI_PROVIDER||"gemini").toLowerCase()];
+  if(!p)throw err("not_configured","unknown provider");
+  return p(env,prompt,j);
+}
