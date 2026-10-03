@@ -1,0 +1,11 @@
+# Workers (not Pages) deploy target — used for temporary preview accounts,
+# since `wrangler pages deploy` does not support --temporary.
+# Production still uses: npm run deploy (wrangler pages deploy).
+name = "seerati-ai"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+not_found_handling = "404-page"
