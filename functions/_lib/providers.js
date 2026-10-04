@@ -22,7 +22,7 @@ const post=async(url,headers,body)=>{
 const need=(v)=>{if(!v)throw err("not_configured");return v};
 export const PROVIDERS={
   async gemini(env,prompt,j){
-    const key=need(env.GEMINI_API_KEY),model=env.GEMINI_MODEL||"gemini-flash-latest";
+    const key=need(env.GEMINI_API_KEY),model=env.GEMINI_MODEL||"gemini-3.5-flash";
     const d=await post(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,{"x-goog-api-key":key},
       {contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:.4,...(j?{responseMimeType:"application/json"}:{})}});
     return (d.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
