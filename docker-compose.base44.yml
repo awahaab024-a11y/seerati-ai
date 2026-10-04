@@ -1,0 +1,36 @@
+services:
+  web:
+    image: node:22-slim
+    working_dir: /app
+    restart: on-failure
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app
+      - /run/base44/app.env:/run/base44/app.env:ro
+    environment:
+      # Local dev defaults — real AI key comes from /run/base44/app.env via .dev.vars below.
+      - AI_PROVIDER=gemini
+      # Vite-style host allow is N/A here; wrangler is told to bind all interfaces.
+      - __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=${BASE44_PUBLIC_HOST_SUFFIX}
+    env_file:
+      - /run/base44/app.env
+    command:
+      - sh
+      - -ec
+      - |
+        npm install --no-audit --no-fund
+        # wrangler pages dev reads .dev.vars for the Pages Function `env` object.
+        # Build it from the platform-delivered secrets (gitignored, never committed).
+        : > .dev.vars
+        if [ -f /run/base44/app.env ]; then cp /run/base44/app.env .dev.vars; fi
+        exec npx wrangler pages dev public \
+          --port 3000 \
+          --ip 0.0.0.0 \
+          --compatibility-date=2025-01-01
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
